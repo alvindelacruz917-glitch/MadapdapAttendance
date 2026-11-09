@@ -1,0 +1,108 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global default-deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isBootstrappedAdmin() {
+      return isSignedIn() &&
+        request.auth.token.email == "alvindelacruz917@gmail.com";
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        isBootstrappedAdmin() ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         getUserData().role == "ADMIN" &&
+         getUserData().status == "ACTIVE")
+      );
+    }
+
+    function isGuard() {
+      return isSignedIn() && (
+        isAdmin() ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         getUserData().role == "GUARD" &&
+         getUserData().status == "ACTIVE")
+      );
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128;
+    }
+
+    // Students
+    match /students/{studentDocId} {
+      allow get, list: if isSignedIn() && (isAdmin() || isGuard());
+      allow create, update, delete: if isAdmin() && isValidId(studentDocId);
+    }
+
+    // Guardians
+    match /guardians/{guardianDocId} {
+      allow get, list: if isSignedIn() && (isAdmin() || isGuard());
+      allow create, update, delete: if isAdmin() && isValidId(guardianDocId);
+    }
+
+    // Users
+    match /users/{userId} {
+      allow get: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow list: if isSignedIn() && isAdmin();
+      allow create: if isSignedIn() && (
+        isAdmin() ||
+        (request.auth.uid == userId && (
+          // If bootstrapped admin is self-registering
+          (isBootstrappedAdmin() && request.resource.data.role == "ADMIN") ||
+          // Standard self-register defaults to GUARD or requires existing invitation
+          request.resource.data.role in ["GUARD", "ADMIN"]
+        ))
+      );
+      allow update: if isSignedIn() && (isAdmin() || request.auth.uid == userId);
+      allow delete: if isAdmin();
+    }
+
+    // Attendance Daily Summary
+    match /attendance/{attendanceDocId} {
+      allow get, list: if isSignedIn() && (isAdmin() || isGuard());
+      allow create, update: if isSignedIn() && (isAdmin() || isGuard()) && isValidId(attendanceDocId);
+      allow delete: if isAdmin();
+    }
+
+    // Attendance Events
+    match /attendance_events/{eventDocId} {
+      allow get, list: if isSignedIn() && (isAdmin() || isGuard());
+      allow create: if isSignedIn() && (isAdmin() || isGuard()) && isValidId(eventDocId);
+      allow update, delete: if isAdmin();
+    }
+
+    // Email logs
+    match /email_logs/{logDocId} {
+      allow get, list: if isSignedIn() && isAdmin();
+      allow create: if isSignedIn() && (isAdmin() || isGuard()) && isValidId(logDocId);
+      allow update, delete: if isAdmin();
+    }
+
+    // School Settings
+    match /school_settings/{settingsId} {
+      allow get, list: if isSignedIn();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // Audit logs
+    match /audit_logs/{auditId} {
+      allow get, list: if isSignedIn() && isAdmin();
+      allow create: if isSignedIn() && (isAdmin() || isGuard());
+      allow update, delete: if false; // Immutable audit log
+    }
+  }
+}
